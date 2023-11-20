@@ -1,0 +1,15 @@
+.env
+.idea
+
+classics*
+
+build
+dist
+e3nn.egg-info
+
+ares_release/data/sample/*
+!ares_release/data/sample/pdbs
+
+lightning_logs
+models
+wandb
