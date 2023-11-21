@@ -15,6 +15,8 @@ from e3nn.non_linearities.nonlin import Nonlinearity
 from e3nn.point.message_passing import Convolution
 from e3nn.radial import GaussianRadialModel
 
+from concurrent.futures import ThreadPoolExecutor
+
 cli_args = {}
 
 
@@ -155,7 +157,7 @@ class ARESModel(pl.LightningModule):
         return {'val_loss': loss}
 
     def test_step(self, batch, batch_idx):
-        y_hat = self(batch)
+        y_hat = self.forwardx(batch)
         loss = torch.nn.functional.smooth_l1_loss(y_hat, batch.label.float())
         self.predictions['pred'].extend(y_hat.cpu().numpy())
         self.predictions['id'].extend(batch.id)
@@ -169,39 +171,85 @@ class ARESModel(pl.LightningModule):
         return optimizer
 
     def forward(self, d):
+        pass
+
+    def forwardx(self, d):
         start = time.perf_counter()
+
+        torch_threads = cli_args.torch_threads
+        async_threads = cli_args.async_threads
 
         out = self.lin1(d.x)
 
-        out0 = self.conv10(out, d.edge_index, d.edge_attr) / 3
-        out1 = self.conv11(out, d.edge_index, d.edge_attr) / 3
-        out2 = self.conv12(out, d.edge_index, d.edge_attr) / 3
+        paths = [
+            {
+                "conv": self.conv10,
+                "norm": self.norm,
+                "lin_a": self.lin20,
+                "nonlin": self.nonlin10,
+                "lin_b": self.lin30,
+            },
+            {
+                "conv": self.conv11,
+                "norm": self.norm,
+                "lin_a": self.lin21,
+                "nonlin": self.nonlin11,
+                "lin_b": self.lin31,
+            },
+            {
+                "conv": self.conv12,
+                "norm": self.norm,
+                "lin_a": self.lin22,
+                "nonlin": self.nonlin12,
+                "lin_b": self.lin32,
+            },
+        ]
 
-        out0 = self.norm(out0)
-        out1 = self.norm(out1)
-        out2 = self.norm(out2)
+        bag = {
+            "paths": paths,
+            "out": out,
+            "edge_index": d.edge_index,
+            "edge_attr": d.edge_attr,
+        }
 
-        out0 = self.lin20(out0)
-        out1 = self.lin21(out1)
-        out2 = self.lin22(out2)
+        torch.set_num_threads(torch_threads // async_threads)
+        with ThreadPoolExecutor(async_threads) as pool:
+            res = [() for _ in range(len(paths))]
+            pool.map(partial(task_boot, res, bag), range(len(paths)))
+        torch.set_num_threads(torch_threads)
 
-        out0 = self.nonlin10(out0)
-        out1 = self.nonlin11(out1)
-        out2 = self.nonlin12(out2)
-
-        out0 = self.lin30(out0)
-        out1 = self.lin31(out1)
-        out2 = self.lin32(out2)
+        # Merge solutions
+        out0 = res[0]
+        out1 = res[1]
+        out2 = res[2]
 
         ins = {0: out0, 1: out1, 2: out2}
         tmp = col.defaultdict(list)
+
+        tuples = []
         for i in range(3):
             for f in range(3):
                 for o in range(abs(f - i), min(i + f + 1, 3)):
-                    curr = self.conv2[str((i, f, o))](
-                        ins[i], d.edge_index, d.edge_attr)
-                    curr /= 3
-                    tmp[o].append(curr)
+                    tuples.append((i, f, o))
+
+        bag = {
+            "tuples": tuples,
+            "ins": ins,
+            "edge_index": d.edge_index,
+            "edge_attr": d.edge_attr,
+            "conv": self.conv2,
+        }
+
+        torch.set_num_threads(torch_threads // async_threads)
+        with ThreadPoolExecutor(async_threads) as pool:
+            res = [() for _ in range(len(tuples))]
+            pool.map(partial(task_conv, res, bag), range(len(tuples)))
+        torch.set_num_threads(torch_threads)
+
+        # Merge solutions
+        for o, curr in res:
+            tmp[o].append(curr)
+
         out0 = torch.cat(tmp[0], axis=1)
         out1 = torch.cat(tmp[1], axis=1)
         out2 = torch.cat(tmp[2], axis=1)
@@ -224,13 +272,24 @@ class ARESModel(pl.LightningModule):
 
         ins = {0: out0, 1: out1, 2: out2}
         tmp = col.defaultdict(list)
-        for i in range(3):
-            for f in range(3):
-                for o in range(abs(f - i), min(i + f + 1, 3)):
-                    curr = self.conv3[str((i, f, o))](
-                        ins[i], d.edge_index, d.edge_attr)
-                    curr /= 3
-                    tmp[o].append(curr)
+
+        bag = {
+            "tuples": tuples,
+            "ins": ins,
+            "edge_index": d.edge_index,
+            "edge_attr": d.edge_attr,
+            "conv": self.conv3,
+        }
+
+        torch.set_num_threads(torch_threads // async_threads)
+        with ThreadPoolExecutor(async_threads) as pool:
+            res = [() for _ in range(len(tuples))]
+            pool.map(partial(task_conv, res, bag), range(len(tuples)))
+        torch.set_num_threads(torch_threads)
+
+        # Merge solutions
+        for o, curr in res:
+            tmp[o].append(curr)
 
         out0 = torch.cat(tmp[0], axis=1)
         out1 = torch.cat(tmp[1], axis=1)
@@ -259,8 +318,32 @@ class ARESModel(pl.LightningModule):
         out = torch.squeeze(out, axis=1)
 
         finish = time.perf_counter()
-        print(f"\n\n\n=== Forwarded in {finish - start} s ===\n\n")
+        print(f"\n\n\n--- Forwarded in {finish - start} s ---\n\n")
         return out
+
+
+def task_boot(res, bag, pos):
+    path = bag['paths'][pos]
+
+    with torch.no_grad():
+        out = path['conv'](bag['out'], bag['edge_index'], bag['edge_attr']) / 3
+        out = path['norm'](out)
+        out = path['lin_a'](out)
+        out = path['nonlin'](out)
+        out = path['lin_b'](out)
+
+    res[pos] = out
+
+
+def task_conv(res, bag, pos):
+    # print("task_conv:", "start:", pos)
+    i, f, o = bag['tuples'][pos]
+    with torch.no_grad():
+        curr = bag['conv'][str((i, f, o))](
+            bag['ins'][i], bag['edge_index'], bag['edge_attr'])
+        curr /= 3
+    res[pos] = (o, curr)
+    # print("task_conv:", "end:", pos)
 
 
 class ShiftedSoftplus:

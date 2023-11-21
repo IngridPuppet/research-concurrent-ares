@@ -182,9 +182,13 @@ def get_edge_edges_and_index(edge_index, symmetric_edges=False):
 
 
 class DataNeighbors(tg.data.Data):
-    def __init__(self, x, Rs_in, pos, r_max, self_interaction=True, **kwargs):
-        edge_index, edge_attr = neighbor_list_and_relative_vec(
-            pos, r_max, self_interaction)
+    def __init__(self, x, Rs_in, pos, r_max, self_interaction=True, compute_edges=True, **kwargs):
+        if compute_edges:
+            edge_index, edge_attr = neighbor_list_and_relative_vec(
+                pos, r_max, self_interaction)
+        else:
+            edge_index, edge_attr = (None, None)
+
         super(DataNeighbors, self).__init__(
             x=x, edge_index=edge_index, edge_attr=edge_attr, pos=pos, Rs_in=Rs_in, **kwargs)
 
