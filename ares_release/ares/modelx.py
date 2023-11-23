@@ -175,9 +175,9 @@ class ARESModel(pl.LightningModule):
 
     def forwardx(self, d):
         start = time.perf_counter()
-
         torch_threads = cli_args.torch_threads
         async_threads = cli_args.async_threads
+        pool = ThreadPoolExecutor(async_threads)
 
         out = self.lin1(d.x)
 
@@ -213,9 +213,9 @@ class ARESModel(pl.LightningModule):
         }
 
         torch.set_num_threads(torch_threads // async_threads)
-        with ThreadPoolExecutor(async_threads) as pool:
-            res = [() for _ in range(len(paths))]
-            pool.map(partial(task_boot, res, bag), range(len(paths)))
+        res = [() for _ in range(len(paths))]
+        jobs = pool.map(partial(task_boot, res, bag), range(len(paths)))
+        list(jobs)  # wait
         torch.set_num_threads(torch_threads)
 
         # Merge solutions
@@ -241,9 +241,9 @@ class ARESModel(pl.LightningModule):
         }
 
         torch.set_num_threads(torch_threads // async_threads)
-        with ThreadPoolExecutor(async_threads) as pool:
-            res = [() for _ in range(len(tuples))]
-            pool.map(partial(task_conv, res, bag), range(len(tuples)))
+        res = [() for _ in range(len(tuples))]
+        jobs = pool.map(partial(task_conv, res, bag), range(len(tuples)))
+        list(jobs)  # wait
         torch.set_num_threads(torch_threads)
 
         # Merge solutions
@@ -282,9 +282,9 @@ class ARESModel(pl.LightningModule):
         }
 
         torch.set_num_threads(torch_threads // async_threads)
-        with ThreadPoolExecutor(async_threads) as pool:
-            res = [() for _ in range(len(tuples))]
-            pool.map(partial(task_conv, res, bag), range(len(tuples)))
+        res = [() for _ in range(len(tuples))]
+        jobs = pool.map(partial(task_conv, res, bag), range(len(tuples)))
+        list(jobs)  # wait
         torch.set_num_threads(torch_threads)
 
         # Merge solutions
@@ -318,6 +318,7 @@ class ARESModel(pl.LightningModule):
         out = torch.squeeze(out, axis=1)
 
         finish = time.perf_counter()
+        pool.shutdown()
         print(f"\n\n\n--- Forwarded in {finish - start} s ---\n\n")
         return out
 

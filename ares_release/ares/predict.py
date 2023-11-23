@@ -11,6 +11,7 @@ import pytorch_lightning as pl
 import torch
 import torch_geometric
 
+import time
 import ares.data as d
 from ares import model
 from ares import modelx
@@ -77,7 +78,10 @@ def main():
 
     # PREDICTION
     logger.info("Running prediction...")
+    start = time.perf_counter()
     out = trainer.test(tfnn, dataloader, verbose=False)
+    finish = time.perf_counter()
+    logger.info(f"Ended prediction in {finish - start} s")
 
     # SAVE OUTPUT
     pd.DataFrame(tfnn.predictions).to_csv(

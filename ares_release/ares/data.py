@@ -1,5 +1,6 @@
 import functools
 import logging
+import time
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,8 @@ def create_transform(use_labels, label_dir, filetype):
 
 
 def prepare(item, k=50, label_to_use='rms'):
+    beg = time.perf_counter()
+
     element_mapping = {
         'C': 0,
         'O': 1,
@@ -110,4 +113,5 @@ def prepare(item, k=50, label_to_use='rms'):
     d.id = item['id']
     d.file_path = item['file_path']
 
+    print("\nPreprocessed in", time.perf_counter() - beg, "s \n")
     return d
